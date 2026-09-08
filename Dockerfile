@@ -47,7 +47,8 @@ RUN chmod +x /start.sh
 # پورت پیش‌فرض (Railway خودش PORT رو می‌ده)
 EXPOSE 2053
 
-# Volume برای دیتابیس و گواهی
-VOLUME ["/etc/x-ui", "/root/cert"]
+# توجه: دستور VOLUME در Railway پشتیبانی نمی‌شود
+# حتماً از بخش Volumes در داشبورد Railway استفاده کنید
+# مسیر پیشنهادی: /etc/x-ui
 
 CMD ["/start.sh"]
