@@ -1,4 +1,4 @@
-# 🚀 3X-UI on Railway
+# 🚀 3X-UI on Railway NEWWWW
 
 پنل **3X-UI** آماده دیپلوی روی **Railway** با Docker.
 
