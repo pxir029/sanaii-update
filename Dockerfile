@@ -1,54 +1,73 @@
-FROM alpine:3.19
+# ========================================================
+# Stage: Frontend (Vite)
+# ========================================================
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
+WORKDIR /src/frontend
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+COPY frontend/ ./
+COPY internal/web/translation /src/internal/web/translation
+RUN npm run build
 
-LABEL maintainer="aavsvs80-coder"
-LABEL description="3X-UI Panel optimized for Railway - from your fork"
+# ========================================================
+# Stage: Builder
+# ========================================================
+FROM golang:1.27-alpine AS builder
+WORKDIR /app
+ARG TARGETARCH
 
-# نصب وابستگی‌ها
-RUN apk add --no-cache \
-    curl \
-    bash \
-    ca-certificates \
-    socat \
-    tzdata \
-    sqlite \
-    tar \
-    unzip \
-    && ln -sf /usr/share/zoneinfo/Asia/Tehran /etc/localtime \
-    && echo "Asia/Tehran" > /etc/timezone
+RUN apk --no-cache --update add \
+  build-base \
+  gcc \
+  curl \
+  unzip
 
-# دانلود باینری از فورک شما
-# اگر هنوز Release نساختی، از نسخه رسمی v3.7.0 استفاده می‌کنه
-# بعد از ساخت Release در گیت‌هاب خودت، لینک رو عوض کن
-ARG XUI_VERSION=v3.7.0
-ARG GITHUB_USER=aavsvs80-coder
-ARG GITHUB_REPO=3X-ui.3.7.0
+COPY . .
+COPY --from=frontend /src/internal/web/dist ./internal/web/dist
 
-RUN set -eux; \
-    echo "Downloading 3x-ui ${XUI_VERSION}..."; \
-    # اول سعی می‌کنه از فورک شما دانلود کنه، اگر نبود از رسمی می‌گیره
-    if curl -fsSL -o /tmp/x-ui.tar.gz \
-        "https://github.com/${GITHUB_USER}/${GITHUB_REPO}/releases/download/${XUI_VERSION}/x-ui-linux-amd64.tar.gz"; then \
-        echo "Downloaded from your fork"; \
-    else \
-        echo "Fork release not found, falling back to official MHSanaei/3x-ui"; \
-        curl -fsSL -o /tmp/x-ui.tar.gz \
-            "https://github.com/MHSanaei/3x-ui/releases/download/${XUI_VERSION}/x-ui-linux-amd64.tar.gz"; \
-    fi; \
-    tar -xzf /tmp/x-ui.tar.gz -C /usr/local/; \
-    rm -f /tmp/x-ui.tar.gz; \
-    chmod +x /usr/local/x-ui/x-ui; \
-    # ساخت پوشه‌های لازم
-    mkdir -p /etc/x-ui /var/log/x-ui /root/cert
+ENV CGO_ENABLED=1
+ENV CGO_CFLAGS="-D_LARGEFILE64_SOURCE"
+RUN go build -ldflags "-w -s" -o build/x-ui main.go
+RUN ./DockerInit.sh "$TARGETARCH"
 
-# کپی اسکریپت استارت
-COPY start.sh /start.sh
-RUN chmod +x /start.sh
+# ========================================================
+# Stage: Final Image of 3x-ui
+# ========================================================
+FROM alpine
+ENV TZ=Asia/Tehran
+WORKDIR /app
 
-# پورت پیش‌فرض (Railway خودش PORT رو می‌ده)
+RUN apk add --no-cache --update \
+  ca-certificates \
+  tzdata \
+  fail2ban \
+  bash \
+  curl \
+  openssl
+
+COPY --from=builder /app/build/ /app/
+COPY --from=builder /app/DockerEntrypoint.sh /app/
+COPY --from=builder /app/x-ui.sh /usr/bin/x-ui
+COPY --from=builder /app/internal/web/translation /app/internal/web/translation
+
+
+# Configure fail2ban
+RUN rm -f /etc/fail2ban/jail.d/alpine-ssh.conf \
+  && cp /etc/fail2ban/jail.conf /etc/fail2ban/jail.local \
+  && sed -i "s/^\[ssh\]$/&\nenabled = false/" /etc/fail2ban/jail.local \
+  && sed -i "s/^\[sshd\]$/&\nenabled = false/" /etc/fail2ban/jail.local \
+  && sed -i "s/#allowipv6 = auto/allowipv6 = auto/g" /etc/fail2ban/fail2ban.conf
+
+RUN chmod +x \
+  /app/DockerEntrypoint.sh \
+  /app/x-ui \
+  /usr/bin/x-ui
+
+ENV XUI_IN_DOCKER="true"
+ENV XUI_MAIN_FOLDER="/app"
+ENV XUI_ENABLE_FAIL2BAN="true"
+ENV XUI_DB_TYPE=""
+ENV XUI_DB_DSN=""
 EXPOSE 2053
-
-# توجه: دستور VOLUME در Railway پشتیبانی نمی‌شود
-# حتماً از بخش Volumes در داشبورد Railway استفاده کنید
-# مسیر پیشنهادی: /etc/x-ui
-
-CMD ["/start.sh"]
+CMD [ "./x-ui" ]
+ENTRYPOINT [ "/app/DockerEntrypoint.sh" ]
